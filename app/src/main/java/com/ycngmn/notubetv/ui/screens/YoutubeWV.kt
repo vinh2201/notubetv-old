@@ -20,7 +20,6 @@ import com.multiplatform.webview.web.rememberWebViewNavigator
 import com.multiplatform.webview.web.rememberWebViewState
 import com.ycngmn.notubetv.R
 import com.ycngmn.notubetv.utils.ExitBridge
-import com.ycngmn.notubetv.utils.NetworkBridge
 
 @Composable
 fun YoutubeWV() {
@@ -97,12 +96,6 @@ fun YoutubeWV() {
             webView.apply {
 
                 addJavascriptInterface(ExitBridge(exitTrigger), "ExitBridge")
-
-                /*
-                Youtube's content security policy doesn't allow calling fetch on
-                3rd party websites (eg. SponsorBlock api). This bridge counters that
-                handling the requests on the native side. */
-                addJavascriptInterface(NetworkBridge(navigator), "NetworkBridge")
 
                 setLayerType(View.LAYER_TYPE_HARDWARE, null)
                 setInitialScale(25)
