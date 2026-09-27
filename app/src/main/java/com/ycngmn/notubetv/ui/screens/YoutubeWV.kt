@@ -2,6 +2,7 @@ package com.ycngmn.notubetv.ui.screens
 
 import android.app.Activity
 import android.view.View
+import android.view.WindowManager
 import android.webkit.CookieManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.fillMaxSize
