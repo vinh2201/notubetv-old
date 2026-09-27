@@ -5,7 +5,7 @@ import android.view.View
 import android.view.WindowManager
 import android.webkit.CookieManager
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
@@ -21,13 +21,11 @@ import com.multiplatform.webview.web.rememberWebViewNavigator
 import com.multiplatform.webview.web.rememberWebViewState
 import com.ycngmn.notubetv.R
 import com.ycngmn.notubetv.utils.ExitBridge
-import com.ycngmn.notubetv.utils.permHandler
 
 @Composable
 fun YoutubeWV() {
 
     val context = LocalContext.current
-    val activity = context as Activity
 
     val state = rememberWebViewState("https://www.youtube.com/tv")
     val navigator = rememberWebViewNavigator()
@@ -70,10 +68,13 @@ fun YoutubeWV() {
 
     WebView(
         captureBackPresses = false,
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .size(
+                with(density) { screenWidthPx.toDp() },
+                with(density) { screenHeightPx.toDp() }
+            ),
         state = state,
         navigator = navigator,
-        platformWebViewParams = permHandler(context),
         onCreated = { webView ->
 
             (activity.window).setLayout(
@@ -89,7 +90,7 @@ fun YoutubeWV() {
 
             state.webSettings.apply {
                 // a random short user agent to enforce leanback UI.
-                customUserAgentString = "Mozilla/5.0 (PS4; Leanback Shell) Gecko/20100101 Firefox/65.0 LeanbackShell/01.00.01.75 Sony PS4/ (PS4, , no, CH)"
+                customUserAgentString = "Mozilla/5.0 (Linux; Android 14; SM-A546E) Cobalt/27.lts.1.1040559-gold (samsung, SM-A546E, Wired)"
                 // 0.0.1 - customUserAgentString = "Mozilla/5.0 (PS4; Leanback Shell) Gecko/20100101 Firefox/65.0 LeanbackShell/01.00.01.75 Sony PS4/ (PS4, , no, CH)"
                 // 0.0.2 - customUserAgentString = "Mozilla/5.0 Cobalt/25 (Sony, PS4)"
                 isJavaScriptEnabled = true
@@ -113,6 +114,9 @@ fun YoutubeWV() {
                 // Hide scrollbars
                 isVerticalScrollBarEnabled = false
                 isHorizontalScrollBarEnabled = false
+
+                settings.setSupportZoom(true)
+                settings.loadWithOverviewMode = true
             }
         }
     )
