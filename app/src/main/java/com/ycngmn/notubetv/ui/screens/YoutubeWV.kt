@@ -20,11 +20,13 @@ import com.multiplatform.webview.web.rememberWebViewNavigator
 import com.multiplatform.webview.web.rememberWebViewState
 import com.ycngmn.notubetv.R
 import com.ycngmn.notubetv.utils.ExitBridge
+import com.ycngmn.notubetv.utils.permHandler
 
 @Composable
 fun YoutubeWV() {
 
     val context = LocalContext.current
+    val activity = context as Activity
 
     val state = rememberWebViewState("https://www.youtube.com/tv")
     val navigator = rememberWebViewNavigator()
@@ -70,7 +72,14 @@ fun YoutubeWV() {
         modifier = Modifier.fillMaxSize(),
         state = state,
         navigator = navigator,
+        platformWebViewParams = permHandler(context),
         onCreated = { webView ->
+
+            (activity.window).setLayout(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT
+            )
+
             // Set up cookies
             val cookieManager = CookieManager.getInstance()
             cookieManager.setAcceptCookie(true)
@@ -101,12 +110,8 @@ fun YoutubeWV() {
                 setInitialScale(25)
 
                 // Hide scrollbars
-                overScrollMode = View.OVER_SCROLL_NEVER
                 isVerticalScrollBarEnabled = false
                 isHorizontalScrollBarEnabled = false
-
-                settings.setSupportZoom(true)
-                settings.loadWithOverviewMode = true
             }
         }
     )
