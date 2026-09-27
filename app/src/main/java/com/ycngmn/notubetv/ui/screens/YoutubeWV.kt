@@ -83,7 +83,9 @@ fun YoutubeWV() {
 
             state.webSettings.apply {
                 // a random short user agent to enforce leanback UI.
-                customUserAgentString = "Roku/DVP-5.0 (025.00E08043A)"
+                customUserAgentString = "Mozilla/5.0 (SMART-TV; Linux; Tizen 5.0) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/2.2 Chrome/63.0.3239.84 TV Safari/537.36"
+                // 0.0.1 - customUserAgentString = "Mozilla/5.0 (PS4; Leanback Shell) Gecko/20100101 Firefox/65.0 LeanbackShell/01.00.01.75 Sony PS4/ (PS4, , no, CH)"
+                // 0.0.2 - customUserAgentString = "Mozilla/5.0 Cobalt/25 (Sony, PS4)"
                 isJavaScriptEnabled = true
 
                 androidWebSettings.apply {
@@ -100,7 +102,7 @@ fun YoutubeWV() {
                 addJavascriptInterface(ExitBridge(exitTrigger), "ExitBridge")
 
                 setLayerType(View.LAYER_TYPE_HARDWARE, null)
-                setInitialScale(35)
+                setInitialScale(25)
 
                 // Hide scrollbars
                 overScrollMode = View.OVER_SCROLL_NEVER
