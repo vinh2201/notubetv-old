@@ -76,12 +76,6 @@ fun YoutubeWV() {
         state = state,
         navigator = navigator,
         onCreated = { webView ->
-
-            (activity.window).setLayout(
-                WindowManager.LayoutParams.MATCH_PARENT,
-                WindowManager.LayoutParams.MATCH_PARENT
-            )
-
             // Set up cookies
             val cookieManager = CookieManager.getInstance()
             cookieManager.setAcceptCookie(true)
