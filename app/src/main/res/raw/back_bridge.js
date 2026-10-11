@@ -26,9 +26,10 @@
 
 // Exit Bridge to react to exit button call.
 (function () {
-    const observer = new MutationObserver((mutations, obs) => {
-        const exitButton = document.querySelector('.ytVirtualListItemLast ytlr-button.ytLrButtonLargeShape');
+    if (window.location.href !== "https://www.youtube.com/tv#/") return;
 
+    const observer = new MutationObserver((mutations, obs) => {
+        const exitButton = document.querySelector('.ytVirtualListItemLast ytlr-button.zylon-ve');
         if (exitButton) {
             exitButton.addEventListener('keydown', (e) => {
                 if (
@@ -39,18 +40,6 @@
                     ExitBridge.onExitCalled();
                 }
             });
-            exitButton.addEventListener('click', (e) => {
-                if (
-                    typeof ExitBridge !== 'undefined' &&
-                    ExitBridge.onExitCalled
-                ) {
-                    ExitBridge.onExitCalled();
-                    e.preventDefault();
-                    e.stopPropagation();
-                }
-            });
-
-            obs.disconnect();
         }
     });
     observer.observe(document.body, { childList: true, subtree: true });
