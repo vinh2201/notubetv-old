@@ -100,7 +100,7 @@ fun YoutubeWV() {
                 addJavascriptInterface(ExitBridge(exitTrigger), "ExitBridge")
 
                 setLayerType(View.LAYER_TYPE_HARDWARE, null)
-                setInitialScale(35)
+                setInitialScale(25)
 
                 // Hide scrollbars
                 overScrollMode = View.OVER_SCROLL_NEVER
