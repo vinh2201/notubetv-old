@@ -23,8 +23,6 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v3
       with:
-        # Make sure the release step uses its own credentials:
-        # https://github.com/cycjimmy/semantic-release-action#private-packages
         persist-credentials: false
         fetch-depth: 0
     - name: Set up JDK
@@ -52,11 +50,27 @@ jobs:
     - name: Install dependencies
       run: npm install
 
+    - name: Generate Temporary Keystore
+      run: |
+        keytool -genkey -v -keystore release.jks \
+          -keyalg RSA -keysize 2048 -validity 36500 \
+          -alias notubetv-key \
+          -storepass notubetv123 \
+          -keypass notubetv123 \
+          -dname "CN=NoTubeTV, OU=Development, O=NoTubeTV, L=Hanoi, ST=Hanoi, C=VN"
+
+    - name: Sign Android APK
+      uses: r0adkll/sign-android-release@v1
+      with:
+        releaseDirectory: app/build/outputs/apk/release
+        alias: notubetv-key
+        releaseStorePassword: notubetv123
+        releaseKeyPassword: notubetv123
+        signingKeyPath: release.jks
+
     - name: Upload Patches Artifact
       uses: actions/upload-artifact@v4
       with:
         name: notubetv-output
-        # Dùng ký tự ** để quét file .jar và .rvp ở mọi thư mục con, tránh việc sai lệch đường dẫn
         path: |
           app/build/outputs/apk/release/*.apk
-
