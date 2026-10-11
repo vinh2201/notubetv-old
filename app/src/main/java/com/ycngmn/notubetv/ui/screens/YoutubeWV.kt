@@ -1,20 +1,19 @@
 package com.ycngmn.notubetv.ui.screens
 
 import android.app.Activity
-import android.graphics.Color as AndroidColor
 import android.view.View
 import android.webkit.CookieManager
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.dp
 import com.multiplatform.webview.web.LoadingState
 import com.multiplatform.webview.web.WebView
 import com.multiplatform.webview.web.rememberWebViewNavigator
@@ -22,34 +21,25 @@ import com.multiplatform.webview.web.rememberWebViewState
 import com.ycngmn.notubetv.R
 import com.ycngmn.notubetv.utils.ExitBridge
 
-private const val YOUTUBE_URL = "https://www.youtube.com/tv"
-
-// Màu nền tối đồng bộ cho WebView và container để tránh hiện tượng chớp trắng hoặc lỗi nền player
-private val NOTUBETV_BG = Color(0xFF09090B)
-
 @Composable
 fun YoutubeWV() {
+
     val context = LocalContext.current
-    val activity = context as? Activity ?: return
-    
-    val state = rememberWebViewState(YOUTUBE_URL)
+
+    val state = rememberWebViewState("https://www.youtube.com/tv")
     val navigator = rememberWebViewNavigator()
 
     val exitTrigger = remember { mutableStateOf(false) }
 
     BackHandler {
-        val backScript = runCatching {
+        navigator.evaluateJavaScript(
             context.resources.openRawResource(R.raw.back_bridge)
                 .bufferedReader().use { it.readText() }
-        }.getOrDefault("")
-        
-        if (backScript.isNotBlank()) {
-            navigator.evaluateJavaScript(backScript)
-        }
+        )
     }
 
     if (exitTrigger.value) {
-        activity.finish()
+        (context as Activity).finish()
     }
 
     val rawResources = remember { listOf(
@@ -61,67 +51,67 @@ fun YoutubeWV() {
     LaunchedEffect(state.loadingState) {
         if (state.loadingState is LoadingState.Finished) {
             for (script in rawResources) {
-                val js = runCatching {
+                val js =
                     context.resources.openRawResource(script)
                         .bufferedReader().use { it.readText() }
-                }.getOrDefault("")
-                
-                if (js.isNotBlank()) {
-                    navigator.evaluateJavaScript(js)
-                }
+                navigator.evaluateJavaScript(js)
             }
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(NOTUBETV_BG)) {
-        WebView(
-            captureBackPresses = false,
-            modifier = Modifier.fillMaxSize(), // Dùng fillMaxSize thay cho tính toán dp thủ công để tránh lệch khung nhìn
-            state = state,
-            navigator = navigator,
-            onCreated = { webView ->
-                // Thiết lập Cookie
-                val cookieManager = CookieManager.getInstance()
-                cookieManager.setAcceptCookie(true)
-                cookieManager.setAcceptThirdPartyCookies(webView, true)
-                cookieManager.flush()
+    val configuration = LocalConfiguration.current
+    val density = LocalDensity.current
 
-                state.webSettings.apply {
-                    // Sử dụng User Agent chuẩn Cobalt/TV để YouTube nhận diện đúng giao diện Leanback
-                    customUserAgentString = "Mozilla/5.0 (DirectFB; Linux armv7l) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Cobalt/24.lts.3-gold (gzip) FireTV/AFTMM (Amazon, AFTMM)"
-                    isJavaScriptEnabled = true
+    val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
+    val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
 
-                    androidWebSettings.apply {
-                        useWideViewPort = true
-                        domStorageEnabled = true
-                        hideDefaultVideoPoster = true
-                        mediaPlaybackRequiresUserGesture = false
-                    }
-                }
+    WebView(
+        captureBackPresses = false,
+        modifier = Modifier
+            .size(
+                with(density) { screenWidthPx.toDp() },
+                with(density) { screenHeightPx.toDp() }
+            ),
+        state = state,
+        navigator = navigator,
+        onCreated = { webView ->
+            // Set up cookies
+            val cookieManager = CookieManager.getInstance()
+            cookieManager.setAcceptCookie(true)
+            cookieManager.setAcceptThirdPartyCookies(webView, true)
+            cookieManager.flush()
 
-                webView.apply {
-                    addJavascriptInterface(ExitBridge(exitTrigger), "ExitBridge")
-                    setLayerType(View.LAYER_TYPE_HARDWARE, null)
-                    
-                    setInitialScale(25)
+            state.webSettings.apply {
+                // a random short user agent to enforce leanback UI.
+                customUserAgentString = "Mozilla/5.0 (PS4; Leanback Shell) Gecko/20100101 Firefox/65.0 LeanbackShell/01.00.01.75 Sony PS4/ (PS4, , no, CH)"
+                // 0.0.1 - customUserAgentString = "Mozilla/5.0 (PS4; Leanback Shell) Gecko/20100101 Firefox/65.0 LeanbackShell/01.00.01.75 Sony PS4/ (PS4, , no, CH)"
+                // 0.0.2 - customUserAgentString = "Mozilla/5.0 Cobalt/25 (Sony, PS4)"
+                isJavaScriptEnabled = true
 
-                    overScrollMode = View.OVER_SCROLL_NEVER
-
-                    // Ẩn thanh cuộn
-                    isVerticalScrollBarEnabled = false
-                    isHorizontalScrollBarEnabled = false
-
-                    // Thiết lập màu nền WebView trùng với theme để player không bị lỗi nền trong suốt
-                    setBackgroundColor(AndroidColor.parseColor("#09090B"))
-
-                    settings.apply {
-                        loadWithOverviewMode = true
-                        setSupportZoom(true)
-                        javaScriptEnabled = true // <--- Sửa lại từ isJavaScriptEnabled thành javaScriptEnabled ở đây nè bác!
-                        domStorageEnabled = true
-                    }
+                androidWebSettings.apply {
+                    //isDebugInspectorInfoEnabled = true
+                    useWideViewPort = true
+                    domStorageEnabled = true
+                    hideDefaultVideoPoster = true
+                    mediaPlaybackRequiresUserGesture = false
                 }
             }
-        )
-    }
+
+            webView.apply {
+
+                addJavascriptInterface(ExitBridge(exitTrigger), "ExitBridge")
+
+                setLayerType(View.LAYER_TYPE_HARDWARE, null)
+                setInitialScale(25)
+
+                // Hide scrollbars
+                overScrollMode = View.OVER_SCROLL_NEVER
+                isVerticalScrollBarEnabled = false
+                isHorizontalScrollBarEnabled = false
+
+                settings.setSupportZoom(true)
+                settings.loadWithOverviewMode = true
+            }
+        }
+    )
 }
