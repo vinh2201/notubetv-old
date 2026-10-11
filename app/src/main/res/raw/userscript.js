@@ -5,7 +5,6 @@
   var g =
     (typeof globalThis !== 'undefined' && globalThis) ||
     (typeof self !== 'undefined' && self) ||
-    // eslint-disable-next-line no-undef
     (typeof global !== 'undefined' && global) ||
     {};
 
@@ -68,7 +67,6 @@
     return value
   }
 
-  // Build a destructive iterator for the value list
   function iteratorFor(items) {
     var iterator = {
       next: function() {
@@ -2634,7 +2632,7 @@
     if (ui) {
       try {
         window.tectonicConfig.featureSwitches.isLimitedMemory = false;
-        window.tectonicConfig.clientData.legacyApplicationQuality = 'full-animation';
+        // Đã loại bỏ dòng legacyApplicationQuality = 'full-animation' gây phóng to, vỡ layout giao diện
         window.tectonicConfig.featureSwitches.enableAnimations = true;
         window.tectonicConfig.featureSwitches.enableOnScrollLinearAnimation = true;
         window.tectonicConfig.featureSwitches.enableListAnimations = true;
@@ -2701,18 +2699,6 @@
       configWrite('routeColor', evt.target.value);
       updateStyle();
     });
-
-    if (configRead('enableFixedUI')) {
-      try {
-        const observer = new MutationObserver((_, _2) => {
-          const body = document.body;
-          if (body.classList.contains('app-quality-root')) {
-            body.classList.remove('app-quality-root');
-          }
-        });
-        observer.observe(document.body, { attributes: true, childList: false, subtree: false });
-      } catch (e) { }
-    }
   }
 
   const interval = setInterval(() => {
