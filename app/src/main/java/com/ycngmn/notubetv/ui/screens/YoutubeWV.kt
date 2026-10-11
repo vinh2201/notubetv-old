@@ -103,7 +103,9 @@ fun YoutubeWV() {
                     addJavascriptInterface(ExitBridge(exitTrigger), "ExitBridge")
                     setLayerType(View.LAYER_TYPE_HARDWARE, null)
                     
-                    // ĐÃ XÓA BỎ setInitialScale(25) - Nguyên nhân chính làm gãy UI, mất chữ và thumbnail!
+                    setInitialScale(25)
+
+                    overScrollMode = View.OVER_SCROLL_NEVER
 
                     // Ẩn thanh cuộn
                     isVerticalScrollBarEnabled = false
@@ -114,10 +116,9 @@ fun YoutubeWV() {
 
                     settings.apply {
                         loadWithOverviewMode = true
-                        textZoom = 100
-                        setSupportZoom(false)          // Tắt zoom vì Android TV dùng remote, không dùng cảm ứng
-                        builtInZoomControls = false    // Không bật điều khiển zoom built-in
-                        displayZoomControls = false    // Ẩn nút điều khiển zoom thừa thãi
+                        setSupportZoom(true)
+                        isJavaScriptEnabled = true
+                        domStorageEnabled = true
                     }
                 }
             }
