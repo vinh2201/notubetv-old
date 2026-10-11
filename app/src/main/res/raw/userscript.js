@@ -1311,16 +1311,21 @@
   const origParse = JSON.parse;
   JSON.parse = function () {
     const r = origParse.apply(this, arguments);
-    if (r.adPlacements && configRead('enableAdBlock')) {
-      r.adPlacements = [];
-    }
-    if (r.playerAds && configRead('enableAdBlock')) {
-      r.playerAds = false;
-    }
-    if (r.adSlots && configRead('enableAdBlock')) {
-      r.adSlots = [];
+  
+    if (configRead('enableAdBlock') && r) {
+      if (r.adPlacements) r.adPlacements = [];
+      if (r.playerAds) r.playerAds = false;
+      if (r.adSlots) r.adSlots = [];
+      if (r.inStreamAds) r.inStreamAds = [];
+      if (r.previewAd) r.previewAd = null;
+    
+      if (r.playerResponse) {
+        if (r.playerResponse.adPlacements) r.playerResponse.adPlacements = [];
+        if (r.playerResponse.playerAds) r.playerResponse.playerAds = false;
+      }
     }
 
+    // Giữ nguyên các logic xử lý DeArrow, Chapters, SponsorBlock bên dưới của bác...
     if (
       r?.contents?.tvBrowseRenderer?.content?.tvSurfaceContentRenderer?.content
         ?.sectionListRenderer?.contents &&
