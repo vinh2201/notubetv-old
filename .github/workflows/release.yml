@@ -42,14 +42,10 @@ jobs:
     - name: Make gradlew executable
       run: chmod +x ./gradlew
 
-    - name: Build with Gradle
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: ./gradlew clean generateReleaseFeatureMetadata build
-
     - name: Install dependencies
       run: npm install
 
+    # === BƯỚC TỰ ĐỘNG TẠO CHỨNG CHỈ TỰ KÝ (KEYSTORE) ===
     - name: Generate Temporary Keystore
       run: |
         keytool -genkey -v -keystore release.jks \
@@ -59,14 +55,16 @@ jobs:
           -keypass notubetv123 \
           -dname "CN=NoTubeTV, OU=Development, O=NoTubeTV, L=Hanoi, ST=Hanoi, C=VN"
 
-    - name: Sign Android APK
-      uses: r0adkll/sign-android-release@v1
-      with:
-        releaseDirectory: app/build/outputs/apk/release
-        alias: notubetv-key
-        releaseStorePassword: notubetv123
-        releaseKeyPassword: notubetv123
-        signingKeyPath: release.jks
+    # === BUILD VÀ KÝ APK TRỰC TIẾP QUA GRADLE (KHÔNG CẦN ACTION PHỤ) ===
+    - name: Build and Sign with Gradle
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        ./gradlew clean generateReleaseFeatureMetadata build \
+          -Pandroid.injected.signing.store.file=${{ github.workspace }}/release.jks \
+          -Pandroid.injected.signing.store.password=notubetv123 \
+          -Pandroid.injected.signing.key.alias=notubetv-key \
+          -Pandroid.injected.signing.key.password=notubetv123
 
     - name: Upload Patches Artifact
       uses: actions/upload-artifact@v4
