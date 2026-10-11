@@ -117,7 +117,7 @@ fun YoutubeWV() {
                     settings.apply {
                         loadWithOverviewMode = true
                         setSupportZoom(true)
-                        isJavaScriptEnabled = true
+                        javaScriptEnabled = true // <--- Sửa lại từ isJavaScriptEnabled thành javaScriptEnabled ở đây nè bác!
                         domStorageEnabled = true
                     }
                 }
