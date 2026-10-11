@@ -2,7 +2,7 @@
 (function () {
 
   function getSearchBar() {
-    // Dùng trực tiếp tên thẻ thay vì idomkey để không bị gãy khi YouTube update
+    // Sử dụng trực tiếp tên thẻ chuẩn gốc để không bị lệch khi YouTube cập nhật
     const searchBars = document.querySelectorAll('ytlr-search-text-box');
     return searchBars[searchBars.length - 1] ?? null;
   }
