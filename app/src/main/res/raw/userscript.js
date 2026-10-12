@@ -299,79 +299,61 @@
 
   // Patch resolveCommand to be able to change NotubeTv settings
 
-  // Patch resolveCommand với cơ chế retry và chặn đúng setting tùy chỉnh để không bị trơ UI
   function patchResolveCommand() {
-    let retries = 0;
-    const maxRetries = 30;
-    
-    const interval = setInterval(() => {
-      let patched = false;
-      for (const key in window._yttv) {
-        if (
-          window._yttv[key] &&
-          window._yttv[key].instance &&
-          typeof window._yttv[key].instance.resolveCommand === "function"
-        ) {
-          const instance = window._yttv[key].instance;
-          
-          if (!instance._notubetvPatched) {
-            const ogResolve = instance.resolveCommand;
-            instance.resolveCommand = function (cmd, _) {
-              if (cmd.setClientSettingEndpoint) {
-                // Xử lý thay đổi cấu hình NotubeTv
-                for (const settingData of cmd.setClientSettingEndpoint.settingDatas) {
-                  if (settingData.clientSettingEnum && settingData.clientSettingEnum.item) {
-                    const itemName = settingData.clientSettingEnum.item;
-                    const valName = Object.keys(settingData).find((k) => k.includes("Value"));
-                    if (valName) {
-                      const value = valName === "intValue" ? Number(settingData[valName]) : settingData[valName];
-                      if (valName === "arrayValue") {
-                        const arr = configRead(itemName);
-                        if (arr.includes(value)) {
-                          arr.splice(arr.indexOf(value), 1);
-                        } else {
-                          arr.push(value);
-                        }
-                        configWrite(itemName, arr);
-                      } else {
-                        configWrite(itemName, value);
-                      }
+    for (const key in window._yttv) {
+      if (
+        window._yttv[key] &&
+        window._yttv[key].instance &&
+        window._yttv[key].instance.resolveCommand
+      ) {
+        const ogResolve = window._yttv[key].instance.resolveCommand;
+        window._yttv[key].instance.resolveCommand = function (cmd, _) {
+          if (cmd.setClientSettingEndpoint) {
+            // Command to change client settings. Use NotubeTv configuration to change settings.
+            for (const settings of cmd.setClientSettingEndpoint.settingDatas) {
+              if (!settings.clientSettingEnum.item.includes("_")) {
+                for (const setting of cmd.setClientSettingEndpoint
+                  .settingDatas) {
+                  const valName = Object.keys(setting).find((key) =>
+                    key.includes("Value")
+                  );
+                  const value =
+                    valName === "intValue"
+                      ? Number(setting[valName])
+                      : setting[valName];
+                  if (valName === "arrayValue") {
+                    const arr = configRead(setting.clientSettingEnum.item);
+                    if (arr.includes(value)) {
+                      arr.splice(arr.indexOf(value), 1);
+                    } else {
+                      arr.push(value);
                     }
-                  }
+                    configWrite(setting.clientSettingEnum.item, arr);
+                  } else configWrite(setting.clientSettingEnum.item, value);
                 }
-                // CHẶN không gọi ogResolve cho setting tùy chỉnh để tránh làm YouTube TV crash/trơ UI
-                return true; 
-              } else if (cmd.customAction) {
-                customAction(cmd.customAction.action, cmd.customAction.parameters);
-                return true;
-              } else if (cmd?.showEngagementPanelEndpoint?.customAction) {
-                customAction(
-                  cmd.showEngagementPanelEndpoint.customAction.action,
-                  cmd.showEngagementPanelEndpoint.customAction.parameters
-                );
-                return true;
               }
-              return ogResolve.call(this, cmd, _);
-            };
-            
-            instance._notubetvPatched = true;
-            patched = true;
+            }
+            return true;
+          } else if (cmd.customAction) {
+            customAction(cmd.customAction.action, cmd.customAction.parameters);
+            return true;
+          } else if (cmd?.showEngagementPanelEndpoint?.customAction) {
+            customAction(
+              cmd.showEngagementPanelEndpoint.customAction.action,
+              cmd.showEngagementPanelEndpoint.customAction.parameters
+            );
+            return true;
           }
-        }
+          return ogResolve.call(this, cmd, _);
+        };
       }
-      
-      if (patched || retries >= maxRetries) {
-        clearInterval(interval);
-      }
-      retries++;
-    }, 500);
+    }
   }
 
   function customAction(action, parameters) {
     switch (action) {
       case "SETTINGS_UPDATE":
-        resolveCommand({ signalAction: { signal: "POPUP_BACK" } });
-        setTimeout(() => modernUI(false, parameters), 50);
+        modernUI(true, parameters);
         break;
       case "SKIP":
         const video = document.querySelector("video");
