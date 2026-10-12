@@ -370,7 +370,8 @@
   function customAction(action, parameters) {
     switch (action) {
       case "SETTINGS_UPDATE":
-        modernUI(true, parameters);
+        resolveCommand({ signalAction: { signal: "POPUP_BACK" } });
+        setTimeout(() => modernUI(false, parameters), 50);
         break;
       case "SKIP":
         const video = document.querySelector("video");
