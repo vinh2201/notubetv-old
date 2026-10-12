@@ -299,54 +299,71 @@
 
   // Patch resolveCommand to be able to change NotubeTv settings
 
+// Patch resolveCommand với cơ chế retry thông minh để chắc chắn bắt được window._yttv
   function patchResolveCommand() {
-    for (const key in window._yttv) {
-      if (
-        window._yttv[key] &&
-        window._yttv[key].instance &&
-        window._yttv[key].instance.resolveCommand
-      ) {
-        const ogResolve = window._yttv[key].instance.resolveCommand;
-        window._yttv[key].instance.resolveCommand = function (cmd, _) {
-          if (cmd.setClientSettingEndpoint) {
-            // Command to change client settings. Use NotubeTv configuration to change settings.
-            for (const settings of cmd.setClientSettingEndpoint.settingDatas) {
-              if (!settings.clientSettingEnum.item.includes("_")) {
-                for (const setting of cmd.setClientSettingEndpoint
-                  .settingDatas) {
-                  const valName = Object.keys(setting).find((key) =>
-                    key.includes("Value")
-                  );
-                  const value =
-                    valName === "intValue"
-                      ? Number(setting[valName])
-                      : setting[valName];
-                  if (valName === "arrayValue") {
-                    const arr = configRead(setting.clientSettingEnum.item);
-                    if (arr.includes(value)) {
-                      arr.splice(arr.indexOf(value), 1);
-                    } else {
-                      arr.push(value);
+    let retries = 0;
+    const maxRetries = 30; // Thử tối đa 30 lần (15 giây)
+    
+    const interval = setInterval(() => {
+      let patched = false;
+      for (const key in window._yttv) {
+        if (
+          window._yttv[key] &&
+          window._yttv[key].instance &&
+          typeof window._yttv[key].instance.resolveCommand === "function"
+        ) {
+          const instance = window._yttv[key].instance;
+          
+          // Kiểm tra xem instance này đã được patch chưa để tránh lặp
+          if (!instance._notubetvPatched) {
+            const ogResolve = instance.resolveCommand;
+            instance.resolveCommand = function (cmd, _) {
+              if (cmd.setClientSettingEndpoint) {
+                // Xử lý thay đổi cấu hình NotubeTv
+                for (const settingData of cmd.setClientSettingEndpoint.settingDatas) {
+                  if (settingData.clientSettingEnum && settingData.clientSettingEnum.item) {
+                    const itemName = settingData.clientSettingEnum.item;
+                    const valName = Object.keys(settingData).find((k) => k.includes("Value"));
+                    if (valName) {
+                      const value = valName === "intValue" ? Number(settingData[valName]) : settingData[valName];
+                      if (valName === "arrayValue") {
+                        const arr = configRead(itemName);
+                        if (arr.includes(value)) {
+                          arr.splice(arr.indexOf(value), 1);
+                        } else {
+                          arr.push(value);
+                        }
+                        configWrite(itemName, arr);
+                      } else {
+                        configWrite(itemName, value);
+                      }
                     }
-                    configWrite(setting.clientSettingEnum.item, arr);
-                  } else configWrite(setting.clientSettingEnum.item, value);
+                  }
                 }
+              } else if (cmd.customAction) {
+                customAction(cmd.customAction.action, cmd.customAction.parameters);
+                return true;
+              } else if (cmd?.showEngagementPanelEndpoint?.customAction) {
+                customAction(
+                  cmd.showEngagementPanelEndpoint.customAction.action,
+                  cmd.showEngagementPanelEndpoint.customAction.parameters
+                );
+                return true;
               }
-            }
-          } else if (cmd.customAction) {
-            customAction(cmd.customAction.action, cmd.customAction.parameters);
-            return true;
-          } else if (cmd?.showEngagementPanelEndpoint?.customAction) {
-            customAction(
-              cmd.showEngagementPanelEndpoint.customAction.action,
-              cmd.showEngagementPanelEndpoint.customAction.parameters
-            );
-            return true;
+              return ogResolve.call(this, cmd, _);
+            };
+            
+            instance._notubetvPatched = true;
+            patched = true;
           }
-          return ogResolve.call(this, cmd, _);
-        };
+        }
       }
-    }
+      
+      if (patched || retries >= maxRetries) {
+        clearInterval(interval);
+      }
+      retries++;
+    }, 500);
   }
 
   function customAction(action, parameters) {
