@@ -299,10 +299,10 @@
 
   // Patch resolveCommand to be able to change NotubeTv settings
 
-// Patch resolveCommand với cơ chế retry thông minh để chắc chắn bắt được window._yttv
+  // Patch resolveCommand với cơ chế retry và chặn đúng setting tùy chỉnh để không bị trơ UI
   function patchResolveCommand() {
     let retries = 0;
-    const maxRetries = 30; // Thử tối đa 30 lần (15 giây)
+    const maxRetries = 30;
     
     const interval = setInterval(() => {
       let patched = false;
@@ -314,7 +314,6 @@
         ) {
           const instance = window._yttv[key].instance;
           
-          // Kiểm tra xem instance này đã được patch chưa để tránh lặp
           if (!instance._notubetvPatched) {
             const ogResolve = instance.resolveCommand;
             instance.resolveCommand = function (cmd, _) {
@@ -340,6 +339,8 @@
                     }
                   }
                 }
+                // CHẶN không gọi ogResolve cho setting tùy chỉnh để tránh làm YouTube TV crash/trơ UI
+                return true; 
               } else if (cmd.customAction) {
                 customAction(cmd.customAction.action, cmd.customAction.parameters);
                 return true;

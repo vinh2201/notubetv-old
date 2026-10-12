@@ -1,50 +1,39 @@
 // File: back_bridge.js
 (function() {
-    // Dịch phím Back vật lý thành Escape (nếu cần dùng qua BackHandler)
     function dispatchKey(key, keyCode, code) {
         const downEvent = new KeyboardEvent('keydown', { key, keyCode, code, which: keyCode, bubbles: true, cancelable: true });
         const upEvent = new KeyboardEvent('keyup', { key, keyCode, code, which: keyCode, bubbles: true, cancelable: true });
         document.dispatchEvent(downEvent);
         document.dispatchEvent(upEvent);
     }
-    window.dispatchEscapeKey = () => dispatchKey('Escape', 27, 'Escape');
-})();
 
-// Logic Exit: Nhấn phím Escape 2 lần liên tiếp khi đang trỏ (focus) ở thẻ item cuối cùng trong menu sidebar (.ytVirtualListItemLast)
-(function () {
-    if (window.location.href !== "https://www.youtube.com/tv#/") return;
+    // Kiểm tra xem user có đang trỏ vào thẻ item cuối cùng của sidebar hay không (.ytVirtualListItemLast)
+    const lastItem = document.querySelector('.ytVirtualListItemLast');
+    const isFocusedOnLastItem = lastItem && lastItem.contains(document.activeElement);
 
-    let escapeCount = 0;
-    let escapeTimer = null;
+    if (isFocusedOnLastItem) {
+        if (!window._exitPressCount) window._exitPressCount = 0;
+        window._exitPressCount++;
 
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' || e.keyCode === 27) {
-            // Thẻ item cuối cùng trên thanh sidebar (nơi chứa profile/cài đặt/thoát)
-            const lastItem = document.querySelector('.ytVirtualListItemLast');
-            
-            // Kiểm tra xem phần tử đang active/focus có nằm trong thẻ đó hay không
-            const isFocusedOnLastItem = lastItem && lastItem.contains(document.activeElement);
-
-            if (isFocusedOnLastItem) {
-                escapeCount++;
-                
-                if (escapeCount === 1) {
-                    // Đợi lần bấm Escape tiếp theo trong vòng 1.2 giây
-                    escapeTimer = setTimeout(() => {
-                        escapeCount = 0;
-                    }, 1200);
-                } else if (escapeCount >= 2) {
-                    clearTimeout(escapeTimer);
-                    escapeCount = 0;
-                    if (typeof ExitBridge !== 'undefined' && ExitBridge.onExitCalled) {
-                        ExitBridge.onExitCalled();
-                    }
-                }
-            } else {
-                // Nếu user trỏ ra chỗ khác thì reset đếm
-                escapeCount = 0;
-                clearTimeout(escapeTimer);
+        if (window._exitPressCount === 1) {
+            if (window._exitTimer) clearTimeout(window._exitTimer);
+            window._exitTimer = setTimeout(() => {
+                window._exitPressCount = 0;
+            }, 1200);
+            // Gửi phím Escape lần đầu
+            dispatchKey('Escape', 27, 'Escape');
+        } else if (window._exitPressCount >= 2) {
+            if (window._exitTimer) clearTimeout(window._exitTimer);
+            window._exitPressCount = 0;
+            // Nhấn lần 2 liên tiếp ở vị trí này -> Thoát ứng dụng
+            if (typeof ExitBridge !== 'undefined' && ExitBridge.onExitCalled) {
+                ExitBridge.onExitCalled();
+                return;
             }
         }
-    }, true);
+    } else {
+        // Reset bộ đếm và thực hiện hành vi Escape bình thường (đóng video, quay lại menu...)
+        window._exitPressCount = 0;
+        dispatchKey('Escape', 27, 'Escape');
+    }
 })();
