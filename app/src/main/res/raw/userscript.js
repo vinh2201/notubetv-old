@@ -590,7 +590,7 @@
     },
   };
 
-  const sponsorblockAPI = "https://api.sponsor.ajay.app/api";
+  const sponsorblockAPI = "https://sponsor.ajay.app/api";
 
   class SponsorBlockHandler {
     video = null;
