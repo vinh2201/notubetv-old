@@ -274,7 +274,7 @@
     }
 
     showModal(
-      "NotubeTv Settings",
+      "NoTubeTV Settings",
       buttons,
       parameters && parameters.length > 0 ? parameters[0] : 0,
       "tt-settings",
