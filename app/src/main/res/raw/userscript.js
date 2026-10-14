@@ -13,6 +13,7 @@
     enableSponsorBlockSelfPromo: true,
     enableSponsorBlockMusicOfftopic: false,
     enableShorts: true,
+    enableForceAvc1: true, // Thêm tùy chọn Force Codec AVC1 mặc định là true
   };
 
   let localConfig;
@@ -212,6 +213,11 @@
         icon: "YOUTUBE_SHORTS_FILL_24",
         value: "enableShorts",
       },
+      {
+        name: "Force Codec AVC1",
+        icon: "SETTINGS",
+        value: "enableForceAvc1",
+      },
     ];
 
     const buttons = [];
@@ -290,9 +296,7 @@
     }
   }
 
-  // Patch resolveCommand to be able to change NotubeTv settings
-
-  // Patch resolveCommand xử lý chuẩn xác commandExecutorCommand và cập nhật setting
+  // Patch resolveCommand để xử lý chuẩn xác commandExecutorCommand và cập nhật setting
   function patchResolveCommand() {
     let retries = 0;
     const maxRetries = 50;
@@ -312,7 +316,6 @@
             instance.resolveCommand = function (cmd, _) {
               let commandsToExec = [];
               
-              // Bóc tách mảng lệnh từ commandExecutorCommand của YouTube TV
               if (cmd && cmd.commandExecutorCommand && Array.isArray(cmd.commandExecutorCommand.commands)) {
                 commandsToExec = cmd.commandExecutorCommand.commands;
               } else if (cmd && cmd.setClientSettingEndpoint) {
@@ -354,7 +357,6 @@
                   }
                 }
 
-                // Chặn không cho YouTube TV xử lý tiếp các setting tùy chỉnh gây lỗi
                 if (handledCustomAction || commandsToExec.some(c => c.setClientSettingEndpoint)) {
                   return true;
                 }
@@ -396,30 +398,35 @@
     }
   }
 
-  /*
-   * Surgical ad removal, matching the proven behaviour of upstream
-   * TizenTube / youtube-webos.
-   *
-   * We intentionally do NOT recursively delete every ad-related key. In
-   * particular the ad telemetry/heartbeat payloads (adBreakHeartbeatParams,
-   * adLayoutLoggingData, adDurationRemaining, …) are left untouched: they
-   * carry the "ad was shown" handshake, and stripping them makes YouTube's
-   * TV backend escalate to server-stitched ads that no client-side filter
-   * can remove. We only neutralise the ad *content* payloads and remove ad
-   * *tiles* from feeds.
-   */
+  // Logic lọc và ép buộc sử dụng codec AVC1 cho streamingData
+  function filterStreamingDataCodec(streamingData) {
+    if (!streamingData) return;
+    const filterFormats = (formats) => {
+      if (!Array.isArray(formats)) return formats;
+      const hasAvc1 = formats.some(f => f.mimeType && f.mimeType.includes("avc1"));
+      if (!hasAvc1) return formats;
+      return formats.filter(f => {
+        const mime = f.mimeType || "";
+        if (mime.startsWith("video/")) {
+          return mime.includes("avc1");
+        }
+        return true;
+      });
+    };
+    if (streamingData.formats) {
+      streamingData.formats = filterFormats(streamingData.formats);
+    }
+    if (streamingData.adaptiveFormats) {
+      streamingData.adaptiveFormats = filterFormats(streamingData.adaptiveFormats);
+    }
+  }
 
-  // Neutralise the player-response ad payloads (top level of /player and
-  // watch-next responses). Emptying rather than deleting matches upstream
-  // and keeps the shapes the player expects.
   function scrubPlayerAds(r) {
     if (Array.isArray(r?.adPlacements)) r.adPlacements = [];
     if (r?.playerAds) r.playerAds = false;
     if (Array.isArray(r?.adSlots)) r.adSlots = [];
   }
 
-  // Remove ad tiles from a single section list: full-width ad cards, the
-  // home masthead ad, and ad tiles inside horizontal shelves.
   function filterAdsFromSectionList(sectionList) {
     if (!sectionList || !Array.isArray(sectionList.contents)) return;
 
@@ -441,12 +448,10 @@
     }
   }
 
-  // Strip ads from every payload surface, mirroring the shorts traversal.
   function stripAdsFromResponse(r) {
     scrubPlayerAds(r);
     forEachSectionList(r, filterAdsFromSectionList);
 
-    // Sponsored reels in the shorts player queue.
     if (Array.isArray(r?.entries)) {
       r.entries = r.entries.filter(
         (entry) => !entry?.command?.reelWatchEndpoint?.adClientParams?.isAd
@@ -454,14 +459,8 @@
     }
   }
 
-  /*
-   * Server-stitched ("SSAP") ads are part of the video stream itself, so
-   * removing ad payloads cannot prevent them from playing. Before scrubbing
-   * we record any ad time ranges the player response declares, and a
-   * watchdog seeks past them during playback.
-   */
   const adSkipState = { videoId: null, ranges: [] };
-  window.__vidroxAdSkipState = adSkipState; // exposed for debugging
+  window.__vidroxAdSkipState = adSkipState;
 
   function collectDeclaredAdRanges(value, ranges, seen) {
     if (!value || typeof value !== "object" || seen.has(value)) return;
@@ -480,8 +479,6 @@
     ) {
       const start = Number(offset.offsetStartMilliseconds) / 1000;
       const end = Number(offset.offsetEndMilliseconds) / 1000;
-      // Zero-length offsets are client-side trigger points, not stitched
-      // segments; only real ranges are skippable.
       if (isFinite(start) && isFinite(end) && end - start > 0.5) {
         ranges.push({ start, end });
       }
@@ -507,11 +504,6 @@
     }
   }
 
-  /*
-   * Central response filter used by every parse hook below. Must never
-   * throw: an exception escaping into YouTube's own parsing would break
-   * the whole app.
-   */
   const processedPayloads = typeof WeakSet !== "undefined" ? new WeakSet() : null;
 
   function processApiResponse(r) {
@@ -527,9 +519,13 @@
         stripAdsFromResponse(r);
       }
 
-      // Filter out shorts/reels everywhere when shorts are disabled
       if (!configRead("enableShorts")) {
         stripShortsFromResponse(r);
+      }
+
+      // Kích hoạt lọc/ép codec AVC1 nếu được bật trong cấu hình
+      if (configRead("enableForceAvc1")) {
+        filterStreamingDataCodec(r?.streamingData);
       }
     } catch (err) {
       console.error("[NoTubeTV] response filtering failed:", err);
@@ -538,21 +534,11 @@
     return r;
   }
 
-  /*
-   * Parse/serialize hooks. This script runs at document start, so these
-   * cover YouTube's bootstrap traffic too. Every path YouTube can use to
-   * turn bytes into objects is hooked: JSON.parse (XHR responseText),
-   * Response.json (fetch), and the XHR `response` getter (responseType
-   * "json").
-   */
   const origParse = JSON.parse;
   JSON.parse = function () {
     return processApiResponse(origParse.apply(this, arguments));
   };
 
-  // Mark inline (preview) playback requests as ad-free, mirroring TizenTube.
-  // The flag is set on a deep clone, never on YouTube's live request object:
-  // mutating the original corrupts player state across subsequent requests.
   const origStringify = JSON.stringify;
   JSON.stringify = function (value, replacer, space) {
     try {
@@ -601,12 +587,6 @@
     }
   }
 
-  /*
-   * YouTube's TV bundle keeps its own captured JSON object
-   * (window._yttv[key].JSON), which bypasses the global hooks above.
-   * Re-point those references at our patched functions, mirroring
-   * upstream TizenTube.
-   */
   function patchBundledJsonReferences() {
     if (!window._yttv) return;
     for (const key in window._yttv) {
@@ -624,18 +604,7 @@
     }
   }
 
-
-  /*
-   * Last line of defense for ads that survive payload scrubbing (e.g.
-   * server-stitched ones): auto-click any visible skip-ad button, and seek
-   * past ad ranges the player response declared. Seeking additionally
-   * requires ad UI to be visible in the player, so a declared range that
-   * merely marks an overlay-ad display window can never skip real content.
-   */
   const AD_SKIP_TICK_MS = 500;
-  // Unambiguously ad-related; safe to click whenever visible.
-  // 'skip-ad' and aria-label variants are generic fallbacks that survive
-  // future renames.
   const AD_SKIP_BUTTON_SELECTORS = [
     '[class*="skip-ad" i]',
     '[class*="SkipAd"]',
@@ -644,10 +613,6 @@
     '[aria-label*="skip ad" i]',
   ].join(", ");
 
-  // The leanback skip control. Base name `ytlr-skip-button` is confirmed
-  // from captured watch-page DOM (its animation class is
-  // `ytlr-skip-button-animate-in`). Only clicked while ad UI is on screen,
-  // so a non-ad skip control can never be spammed.
   const AD_CONTEXT_SKIP_BUTTON_SELECTORS = [
     AD_SKIP_BUTTON_SELECTORS,
     "ytlr-skip-button",
@@ -655,11 +620,6 @@
     '[class*="skip-button" i]',
   ].join(", ");
 
-  // Ad UI elements, verified against captured YouTube TV watch-page DOM:
-  // ads render <ytlr-ad-attribution> / <ytlr-ad-notify> elements. These
-  // exist in the DOM but stay zero-size until an ad shows, so callers gate
-  // on getBoundingClientRect (see isAdUiVisible). The kebab-case fallbacks
-  // cover related ad elements the static capture didn't surface.
   const AD_OVERLAY_SELECTORS = [
     "ytlr-ad-attribution",
     "ytlr-ad-notify",
@@ -681,7 +641,7 @@
     );
     for (const el of candidates) {
       const rect = el.getBoundingClientRect();
-      if (!rect.width && !rect.height) continue; // not visible
+      if (!rect.width && !rect.height) continue;
 
       for (const type of ["mousedown", "mouseup", "click"]) {
         el.dispatchEvent(
@@ -708,7 +668,6 @@
   function skipDeclaredAdRange(video) {
     if (!adSkipState.ranges.length) return false;
 
-    // Only act on the video the ranges were captured for.
     const match = location.hash.match(/[?&]v=([^&]+)/);
     if (match && adSkipState.videoId && match[1] !== adSkipState.videoId) {
       return false;
@@ -727,9 +686,7 @@
         );
         try {
           showToast("Ad block", "Skipping ad");
-        } catch (toastErr) {
-          // Toast is cosmetic; never let it break the skip.
-        }
+        } catch (toastErr) {}
         return true;
       }
     }
@@ -741,7 +698,6 @@
   setInterval(() => {
     try {
       adSkipTickCount++;
-      // The bundle can (re)create its JSON reference late; re-check every 2s.
       if (adSkipTickCount % 4 === 0) patchBundledJsonReferences();
 
       if (!configRead("enableAdBlock")) return;
@@ -756,9 +712,7 @@
 
       if (clickSkipButton(adUiVisible)) return;
       if (adUiVisible) skipDeclaredAdRange(video);
-    } catch (err) {
-      // Keep the watchdog alive no matter what.
-    }
+    } catch (err) {}
   }, AD_SKIP_TICK_MS);
 
   function getShelfTitleText(shelf) {
@@ -809,7 +763,6 @@
     const title = getShelfTitleText(shelf);
     const items = shelf?.shelfRenderer?.content?.horizontalListRenderer?.items || [];
 
-    // A reel shelf is shorts by definition.
     if (shelf?.reelShelfRenderer) {
       return true;
     }
@@ -853,30 +806,18 @@
       .filter((shelf) => shelf != null);
   }
 
-  /*
-   * Feeds appear on more surfaces than the home page: search results,
-   * subscription/channel tabs, the related-videos pivot next to the
-   * player, and rows paged in via continuations. Both the ad filter and
-   * the shorts filter run over every one of them via this single walker,
-   * so a surface can never be handled for one but missed for the other.
-   */
   function forEachSectionList(r, cb) {
-    // Home screen
     cb(
       r?.contents?.tvBrowseRenderer?.content?.tvSurfaceContentRenderer
         ?.content?.sectionListRenderer
     );
 
-    // Search results
     cb(r?.contents?.sectionListRenderer);
 
-    // Rows paged in while scrolling home/search
     cb(r?.continuationContents?.sectionListContinuation);
 
-    // Related videos next to/below the player
     cb(r?.contents?.singleColumnWatchNextResults?.pivot?.sectionListRenderer);
 
-    // Subscriptions/channel tabs
     const navSections =
       r?.contents?.tvBrowseRenderer?.content?.tvSecondaryNavRenderer?.sections;
     if (Array.isArray(navSections)) {
@@ -893,26 +834,21 @@
     }
   }
 
-  // Strip shorts/reels from every payload surface when shorts are disabled.
   function stripShortsFromResponse(r) {
     forEachSectionList(r, filterShortsFromSectionList);
 
-    // Items paged into a single row
     const horizontalItems = r?.continuationContents?.horizontalListContinuation?.items;
     if (Array.isArray(horizontalItems)) {
       r.continuationContents.horizontalListContinuation.items =
         horizontalItems.filter((item) => !isShortsItem(item));
     }
 
-    // The reel (shorts) player's playback queue
     if (Array.isArray(r?.entries)) {
       r.entries = r.entries.filter(
         (entry) => !entry?.command?.reelWatchEndpoint
       );
     }
 
-    // Left-nav "Shorts" entry (/youtubei/v1/guide). The rendered DOM uses
-    // obfuscated classes, so the CSS fallback can't target it reliably.
     if (Array.isArray(r?.items)) {
       for (const section of r.items) {
         const sectionItems = section?.guideSectionRenderer?.items;
@@ -924,7 +860,6 @@
       }
     }
 
-    // Guide startup behaviour that relaunches the app into the Shorts player.
     if (Array.isArray(r?.startupBehaviours)) {
       r.startupBehaviours = r.startupBehaviours.filter(
         (behaviour) => !behaviour?.launchToShorts
@@ -941,8 +876,6 @@
     );
   }
 
-
-  // The tiny-sha256 module, edited to export itself.
   var sha256 = function sha256(ascii) {
     function rightRotate(value, amount) {
       return (value >>> amount) | (value << (32 - amount));
@@ -1027,7 +960,6 @@
     return result;
   };
 
-  // Copied from https://github.com/ajayyy/SponsorBlock/blob/9392d16617d2d48abb6125c00e2ff6042cb7bebe/src/config.ts#L179-L233
   const barTypes = {
     sponsor: { color: "#00d400", opacity: "0.7", name: "sponsored segment" },
     intro: { color: "#00ffff", opacity: "0.7", name: "intro" },
@@ -1218,7 +1150,6 @@
     }
   }
 
-
   window.sponsorblock = null;
 
   window.addEventListener(
@@ -1246,9 +1177,6 @@
     false
   );
 
-  /*global navigate*/
-
-  // It just works, okay?
   const interval$1 = setInterval(() => {
     patchBundledJsonReferences();
     const videoElement = document.querySelector("video");
@@ -1298,7 +1226,6 @@
     installShortsHidingObserver();
   }
 
-  // Function to hide shorts via CSS — uses only precise selectors, safe for regular content
   function applyShortsHidingCSS() {
     const shortsStyleId = 'notubetv-hide-shorts';
     let existingStyle = document.getElementById(shortsStyleId);
@@ -1388,7 +1315,6 @@
     });
   }
 
-  // Re-apply shorts hiding when config changes
   window.addEventListener('storage', function (e) {
     if (e.key === 'ytaf-configuration') {
       applyShortsHidingCSS();
