@@ -376,6 +376,7 @@
     }, 200);
   }
 
+
   function customAction(action, parameters) {
     switch (action) {
       case "SETTINGS_UPDATE":
@@ -622,6 +623,7 @@
       }
     }
   }
+
 
   /*
    * Last line of defense for ads that survive payload scrubbing (e.g.
@@ -939,6 +941,7 @@
     );
   }
 
+
   // The tiny-sha256 module, edited to export itself.
   var sha256 = function sha256(ascii) {
     function rightRotate(value, amount) {
@@ -1214,6 +1217,7 @@
       }
     }
   }
+
 
   window.sponsorblock = null;
 
