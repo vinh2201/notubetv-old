@@ -178,38 +178,91 @@
         }
     }
 
-    function patchResolveCommand() {
-        for (const key in window._yttv) {
-            if (window._yttv[key] && window._yttv[key].instance && window._yttv[key].instance.resolveCommand) {
-                const ogResolve = window._yttv[key].instance.resolveCommand;
-                window._yttv[key].instance.resolveCommand = function (cmd, _) {
-                    if (cmd.setClientSettingEndpoint) {
-                        for (const settings of cmd.setClientSettingEndpoint.settingDatas) {
-                            if (!settings.clientSettingEnum.item.includes("_")) {
-                                for (const setting of cmd.setClientSettingEndpoint.settingDatas) {
-                                    const valName = Object.keys(setting).find((key) => key.includes("Value"));
-                                    const value = valName === "intValue" ? Number(setting[valName]) : setting[valName];
-                                    if (valName === "arrayValue") {
-                                        const arr = configRead(setting.clientSettingEnum.item);
-                                        if (arr.includes(value)) arr.splice(arr.indexOf(value), 1);
-                                        else arr.push(value);
-                                        configWrite(setting.clientSettingEnum.item, arr);
-                                    } else configWrite(setting.clientSettingEnum.item, value);
-                                }
+  // Patch resolveCommand to be able to change NotubeTv settings
+
+  // Patch resolveCommand xử lý chuẩn xác commandExecutorCommand và cập nhật setting
+  function patchResolveCommand() {
+    let retries = 0;
+    const maxRetries = 50;
+    
+    const interval = setInterval(() => {
+      let patched = false;
+      for (const key in window._yttv) {
+        if (
+          window._yttv[key] &&
+          window._yttv[key].instance &&
+          typeof window._yttv[key].instance.resolveCommand === "function"
+        ) {
+          const instance = window._yttv[key].instance;
+          
+          if (!instance._notubetvPatched) {
+            const ogResolve = instance.resolveCommand;
+            instance.resolveCommand = function (cmd, _) {
+              let commandsToExec = [];
+              
+              // Bóc tách mảng lệnh từ commandExecutorCommand của YouTube TV
+              if (cmd && cmd.commandExecutorCommand && Array.isArray(cmd.commandExecutorCommand.commands)) {
+                commandsToExec = cmd.commandExecutorCommand.commands;
+              } else if (cmd && cmd.setClientSettingEndpoint) {
+                commandsToExec = [cmd];
+              } else if (cmd && cmd.customAction) {
+                commandsToExec = [cmd];
+              }
+
+              if (commandsToExec.length > 0) {
+                let handledCustomAction = false;
+                let targetParameters = null;
+
+                for (const subCmd of commandsToExec) {
+                  if (subCmd.setClientSettingEndpoint) {
+                    for (const settingData of subCmd.setClientSettingEndpoint.settingDatas) {
+                      if (settingData.clientSettingEnum && settingData.clientSettingEnum.item) {
+                        const itemName = settingData.clientSettingEnum.item;
+                        const valName = Object.keys(settingData).find((k) => k.includes("Value"));
+                        if (valName) {
+                          const value = valName === "intValue" ? Number(settingData[valName]) : settingData[valName];
+                          if (valName === "arrayValue") {
+                            const arr = configRead(itemName);
+                            if (arr.includes(value)) {
+                              arr.splice(arr.indexOf(value), 1);
+                            } else {
+                              arr.push(value);
                             }
+                            configWrite(itemName, arr);
+                          } else {
+                            configWrite(itemName, value);
+                          }
                         }
-                    } else if (cmd.customAction) {
-                        customAction(cmd.customAction.action, cmd.customAction.parameters);
-                        return true;
-                    } else if (cmd?.showEngagementPanelEndpoint?.customAction) {
-                        customAction(cmd.showEngagementPanelEndpoint.customAction.action, cmd.showEngagementPanelEndpoint.customAction.parameters);
-                        return true;
+                      }
                     }
-                    return ogResolve.call(this, cmd, _);
-                };
-            }
+                  } else if (subCmd.customAction) {
+                    handledCustomAction = true;
+                    targetParameters = subCmd.customAction.parameters;
+                    customAction(subCmd.customAction.action, subCmd.customAction.parameters);
+                  }
+                }
+
+                // Chặn không cho YouTube TV xử lý tiếp các setting tùy chỉnh gây lỗi
+                if (handledCustomAction || commandsToExec.some(c => c.setClientSettingEndpoint)) {
+                  return true;
+                }
+              }
+
+              return ogResolve.call(this, cmd, _);
+            };
+            
+            instance._notubetvPatched = true;
+            patched = true;
+          }
         }
-    }
+      }
+      
+      if (patched || retries >= maxRetries) {
+        clearInterval(interval);
+      }
+      retries++;
+    }, 200);
+  }
 
     function customAction(action, parameters) {
         switch (action) {
