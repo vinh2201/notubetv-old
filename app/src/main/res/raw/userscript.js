@@ -398,21 +398,48 @@
     }
   }
 
-  // Logic lọc và ép buộc sử dụng codec AVC1 cho streamingData
+  // Logic lọc và ép buộc codec & chất lượng video theo cấu hình
   function filterStreamingDataCodec(streamingData) {
     if (!streamingData) return;
+    const forceAvc1 = configRead("enableForceAvc1");
+
     const filterFormats = (formats) => {
       if (!Array.isArray(formats)) return formats;
-      const hasAvc1 = formats.some(f => f.mimeType && f.mimeType.includes("avc1"));
-      if (!hasAvc1) return formats;
-      return formats.filter(f => {
-        const mime = f.mimeType || "";
-        if (mime.startsWith("video/")) {
-          return mime.includes("avc1");
-        }
-        return true;
-      });
+
+      if (forceAvc1) {
+        // Nếu bật Force Codec AVC1: Giữ nguyên logic lọc AVC1 cũ
+        const hasAvc1 = formats.some(f => f.mimeType && f.mimeType.includes("avc1"));
+        if (!hasAvc1) return formats;
+        return formats.filter(f => {
+          const mime = f.mimeType || "";
+          if (mime.startsWith("video/")) {
+            return mime.includes("avc1");
+          }
+          return true;
+        });
+      } else {
+        // Nếu tắt Force Codec AVC1 (false):
+        // Kiểm tra xem có codec av01 không, nếu có dùng av01, ngược lại fallback sang vp9
+        const hasAv01 = formats.some(f => f.mimeType && f.mimeType.includes("av01"));
+        const targetCodec = hasAv01 ? "av01" : "vp9";
+        const hasTargetCodec = formats.some(f => f.mimeType && f.mimeType.includes(targetCodec));
+
+        return formats.filter(f => {
+          const mime = f.mimeType || "";
+          if (mime.startsWith("video/")) {
+            // Lọc theo codec mục tiêu (av01 hoặc vp9) nếu có
+            if (hasTargetCodec && !mime.includes(targetCodec)) {
+              return false;
+            }
+            // Ép chất lượng video về 720p (height === 720 hoặc qualityLabel === "720p")
+            const is720p = f.height === 720 || f.qualityLabel === "720p";
+            return is720p;
+          }
+          return true; // Giữ lại các định dạng audio và non-video khác
+        });
+      }
     };
+
     if (streamingData.formats) {
       streamingData.formats = filterFormats(streamingData.formats);
     }
