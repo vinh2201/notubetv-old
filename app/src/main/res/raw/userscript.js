@@ -1,6 +1,10 @@
 (function () {
   "use strict";
 
+  // The script can be injected twice (document start + page finished): run only once.
+  if (window.__notubetvLoaded) return;
+  window.__notubetvLoaded = true;
+
   const CONFIG_KEY = "ytaf-configuration";
   const defaultConfig = {
     enableAdBlock: true,
@@ -672,18 +676,73 @@
     };
   }
 
+  // Text-level safety net: a response that still carries ad markers is parsed, cleaned and
+  // serialised again before the app sees it, whichever JSON implementation the app uses.
+  const AD_JSON_MARKERS =
+    /"(?:adSlotRenderer|tvMastheadRenderer|mastheadAd|promotedSparklesTextSearchRenderer|adPlacements|playerAds|adSlots)"/;
+
+  function filterAdsInJsonText(text) {
+    if (typeof text !== "string" || text.length < 200) return text;
+    try {
+      if (!configRead("enableAdBlock") || !AD_JSON_MARKERS.test(text)) return text;
+      const payload = origParse(text);
+      if (!payload || typeof payload !== "object") return text;
+      processApiResponse(payload);
+      return origStringify.call(JSON, payload);
+    } catch (err) {
+      return text;
+    }
+  }
+
+  if (
+    typeof Response !== "undefined" &&
+    Response.prototype &&
+    typeof Response.prototype.text === "function"
+  ) {
+    const origResponseText = Response.prototype.text;
+    Response.prototype.text = function () {
+      return origResponseText.apply(this, arguments).then(filterAdsInJsonText);
+    };
+  }
+
   if (typeof XMLHttpRequest !== "undefined") {
-    const xhrResponse = Object.getOwnPropertyDescriptor(
-      XMLHttpRequest.prototype,
-      "response"
-    );
+    const xhrProto = XMLHttpRequest.prototype;
+    const xhrResponse = Object.getOwnPropertyDescriptor(xhrProto, "response");
+    const xhrResponseText = Object.getOwnPropertyDescriptor(xhrProto, "responseText");
+
+    // same input text -> same output text, without cleaning it again on every read
+    const filteredText = (xhr, raw) => {
+      if (xhr.__ntvSrc === raw && xhr.__ntvOut !== undefined) return xhr.__ntvOut;
+      const out = filterAdsInJsonText(raw);
+      xhr.__ntvSrc = raw;
+      xhr.__ntvOut = out;
+      return out;
+    };
+
+    if (xhrResponseText && xhrResponseText.get) {
+      Object.defineProperty(xhrProto, "responseText", {
+        configurable: true,
+        enumerable: xhrResponseText.enumerable,
+        get: function () {
+          return filteredText(this, xhrResponseText.get.call(this));
+        },
+      });
+    }
+
     if (xhrResponse && xhrResponse.get) {
-      Object.defineProperty(XMLHttpRequest.prototype, "response", {
+      Object.defineProperty(xhrProto, "response", {
         configurable: true,
         enumerable: xhrResponse.enumerable,
         get: function () {
           const value = xhrResponse.get.call(this);
-          if (this.responseType === "json") processApiResponse(value);
+          if (this.responseType === "json") {
+            processApiResponse(value);
+          } else if (
+            typeof value === "string" &&
+            (this.responseType === "" || this.responseType === "text")
+          ) {
+            return filteredText(this, value);
+          }
           return value;
         },
       });
@@ -1061,7 +1120,9 @@
     music_offtopic: { color: "#ff9900", opacity: "0.7", name: "non-music part" },
   };
 
-  const sponsorblockAPI = "https://sponsor.ajay.app/api";
+  const sponsorblockAPI = "https://api.sponsor.ajay.app/api";
+  // Temporary: shows what SponsorBlock found for every video (set to false when it works).
+  const SPONSORBLOCK_DEBUG_TOASTS = true;
 
   class SponsorBlockHandler {
     video = null;
@@ -1093,35 +1154,46 @@
       )}`;
 
       // The hash endpoint answers with a list: one entry per video sharing the hash prefix.
+      const pickEntry = (list) =>
+        Array.isArray(list)
+          ? list.find((entry) => entry && entry.videoID === this.videoID)
+          : list;
+
       let result = null;
+      let reachedServer = false;
       try {
         const res = await fetch(url);
-        if (res.ok) {
-          const list = await res.json();
-          result = Array.isArray(list)
-            ? list.find((entry) => entry && entry.videoID === this.videoID)
-            : list;
-        }
+        reachedServer = true; // any HTTP answer, including 404 = "no segments"
+        if (res.ok) result = pickEntry(await res.json());
       } catch (err) {
         console.warn("[NoTubeTV] SponsorBlock fetch failed:", err);
       }
 
-      // Optional native bridge (only used when the app provides one).
-      if (!result && typeof NetworkBridge !== "undefined") {
+      // Native bridge (only when the app provides one) if the page could not reach the server.
+      if (!reachedServer && typeof NetworkBridge !== "undefined") {
         const resp = await new Promise((resolve) => {
           window.onNetworkBridgeResponse = (jsonString) => resolve(jsonString);
           NetworkBridge.fetch(url, this.videoID);
         });
         try {
-          result = resp ? JSON.parse(resp) : null;
+          result = resp ? pickEntry(JSON.parse(resp)) : null;
+          reachedServer = Boolean(resp);
         } catch (err) {
           result = null;
         }
       }
 
       if (!this.active) return; // destroyed while the request was running
+
       if (!result || !result.segments || !result.segments.length) {
+        if (SPONSORBLOCK_DEBUG_TOASTS) {
+          showToast("SponsorBlock", reachedServer ? "No segments for this video" : "Server unreachable");
+        }
         return;
+      }
+
+      if (SPONSORBLOCK_DEBUG_TOASTS) {
+        showToast("SponsorBlock", `${result.segments.length} segment(s) found`);
       }
 
       this.segments = result.segments;
@@ -1159,6 +1231,9 @@
       this.video.addEventListener("play", this.scheduleSkipHandler);
       this.video.addEventListener("seeked", this.scheduleSkipHandler);
       this.video.addEventListener("durationchange", this.durationChangeHandler);
+
+      // The video may already be playing by the time the segments arrive.
+      if (!this.video.paused) this.scheduleSkip();
     }
 
     buildOverlay() {
@@ -1296,6 +1371,8 @@
     false
   );
 
+  patchBundledJsonReferences();
+
   const interval$1 = setInterval(() => {
     patchBundledJsonReferences();
     const videoElement = document.querySelector("video");
@@ -1304,7 +1381,7 @@
       patchResolveCommand();
       clearInterval(interval$1);
     }
-  }, 250);
+  }, 100);
 
   function execute_once_dom_loaded() {
     var css_248z =

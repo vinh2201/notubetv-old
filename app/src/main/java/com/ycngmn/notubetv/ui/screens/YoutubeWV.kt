@@ -14,12 +14,15 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import com.multiplatform.webview.web.LoadingState
 import com.multiplatform.webview.web.WebView
 import com.multiplatform.webview.web.rememberWebViewNavigator
 import com.multiplatform.webview.web.rememberWebViewState
 import com.ycngmn.notubetv.R
 import com.ycngmn.notubetv.utils.ExitBridge
+import com.ycngmn.notubetv.utils.NetworkBridge
 import com.ycngmn.notubetv.utils.permHandler
 
 @Composable
@@ -31,6 +34,12 @@ fun YoutubeWV() {
     val navigator = rememberWebViewNavigator()
 
     val exitTrigger = remember { mutableStateOf(false) }
+
+    // read once; injected at document start when the WebView supports it (see onCreated)
+    // and evaluated again when the page finishes loading (the script ignores the 2nd run)
+    val userscriptJs = remember {
+        context.resources.openRawResource(R.raw.userscript).bufferedReader().use { it.readText() }
+    }
 
     // microphone permission for voice search (permHandler was written but never used)
     val platformParams = permHandler(context)
@@ -80,6 +89,18 @@ fun YoutubeWV() {
         state = state,
         navigator = navigator,
         onCreated = { webView ->
+
+            // Run the userscript before any script of the page, so its hooks are in place
+            // before the first home-page data is requested. Older WebViews without this
+            // feature keep working: the script is still evaluated when the page finishes.
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                WebViewCompat.addDocumentStartJavaScript(
+                    webView,
+                    userscriptJs,
+                    setOf("https://www.youtube.com")
+                )
+            }
+
             // Set up cookies
             val cookieManager = CookieManager.getInstance()
             cookieManager.setAcceptCookie(true)
@@ -103,6 +124,7 @@ fun YoutubeWV() {
             webView.apply {
 
                 addJavascriptInterface(ExitBridge(exitTrigger), "ExitBridge")
+                addJavascriptInterface(NetworkBridge(navigator), "NetworkBridge")
 
                 setLayerType(View.LAYER_TYPE_HARDWARE, null)
                 setInitialScale(25)

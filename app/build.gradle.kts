@@ -41,6 +41,7 @@ android {
 dependencies {
     api(libs.compose.webview.multiplatform)
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.webkit)
     implementation(libs.androidx.appcompat)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.ui)
