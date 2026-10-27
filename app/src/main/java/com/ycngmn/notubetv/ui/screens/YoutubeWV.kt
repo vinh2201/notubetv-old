@@ -20,6 +20,7 @@ import com.multiplatform.webview.web.rememberWebViewNavigator
 import com.multiplatform.webview.web.rememberWebViewState
 import com.ycngmn.notubetv.R
 import com.ycngmn.notubetv.utils.ExitBridge
+import com.ycngmn.notubetv.utils.permHandler
 
 @Composable
 fun YoutubeWV() {
@@ -31,6 +32,9 @@ fun YoutubeWV() {
 
     val exitTrigger = remember { mutableStateOf(false) }
 
+    // microphone permission for voice search (permHandler was written but never used)
+    val platformParams = permHandler(context)
+
     BackHandler {
         navigator.evaluateJavaScript(
             context.resources.openRawResource(R.raw.back_bridge)
@@ -38,8 +42,8 @@ fun YoutubeWV() {
         )
     }
 
-    if (exitTrigger.value) {
-        (context as Activity).finish()
+    LaunchedEffect(exitTrigger.value) {
+        if (exitTrigger.value) (context as Activity).finish()
     }
 
     val rawResources = remember { listOf(
@@ -67,6 +71,7 @@ fun YoutubeWV() {
 
     WebView(
         captureBackPresses = false,
+        platformWebViewParams = platformParams,
         modifier = Modifier
             .size(
                 with(density) { screenWidthPx.toDp() },

@@ -42,6 +42,13 @@
   window.configWrite = function (key, value) {
     window.localConfig[key] = value;
     window.localStorage[CONFIG_KEY] = JSON.stringify(window.localConfig);
+    // Shorts visibility must follow the toggle immediately (the "storage" event
+    // never fires inside the window that did the write).
+    if (key === "enableShorts") {
+      try {
+        applyShortsHidingCSS();
+      } catch (err) {}
+    }
   };
 
   function showToast(title, subtitle, thumbnails) {
@@ -296,6 +303,29 @@
     }
   }
 
+  // A command belongs to NoTubeTV only if it changes one of NoTubeTV's own config keys
+  // (camelCase, listed in defaultConfig) or runs one of NoTubeTV's own custom actions.
+  const NOTUBETV_ACTIONS = ["SETTINGS_UPDATE", "SKIP"];
+  function isNoTubeTVCommand(c) {
+    if (!c) return false;
+    if (c.setClientSettingEndpoint) {
+      const datas = c.setClientSettingEndpoint.settingDatas;
+      return (
+        Array.isArray(datas) &&
+        datas.length > 0 &&
+        datas.every(
+          (d) =>
+            d &&
+            d.clientSettingEnum &&
+            typeof d.clientSettingEnum.item === "string" &&
+            Object.prototype.hasOwnProperty.call(defaultConfig, d.clientSettingEnum.item)
+        )
+      );
+    }
+    if (c.customAction) return NOTUBETV_ACTIONS.includes(c.customAction.action);
+    return false;
+  }
+
   // Patch resolveCommand để xử lý chuẩn xác commandExecutorCommand và cập nhật setting
   function patchResolveCommand() {
     let retries = 0;
@@ -315,7 +345,7 @@
             const ogResolve = instance.resolveCommand;
             instance.resolveCommand = function (cmd, _) {
               let commandsToExec = [];
-              
+
               if (cmd && cmd.commandExecutorCommand && Array.isArray(cmd.commandExecutorCommand.commands)) {
                 commandsToExec = cmd.commandExecutorCommand.commands;
               } else if (cmd && cmd.setClientSettingEndpoint) {
@@ -324,42 +354,43 @@
                 commandsToExec = [cmd];
               }
 
-              if (commandsToExec.length > 0) {
-                let handledCustomAction = false;
-                let targetParameters = null;
-
+              // Only take over commands that were built by NoTubeTV's own settings
+              // modal. Everything else (YouTube's own settings such as the video
+              // quality menu, YouTube's own custom actions, ...) must reach the app.
+              if (commandsToExec.length > 0 && commandsToExec.every(isNoTubeTVCommand)) {
                 for (const subCmd of commandsToExec) {
                   if (subCmd.setClientSettingEndpoint) {
                     for (const settingData of subCmd.setClientSettingEndpoint.settingDatas) {
-                      if (settingData.clientSettingEnum && settingData.clientSettingEnum.item) {
-                        const itemName = settingData.clientSettingEnum.item;
-                        const valName = Object.keys(settingData).find((k) => k.includes("Value"));
-                        if (valName) {
-                          const value = valName === "intValue" ? Number(settingData[valName]) : settingData[valName];
-                          if (valName === "arrayValue") {
-                            const arr = configRead(itemName);
-                            if (arr.includes(value)) {
-                              arr.splice(arr.indexOf(value), 1);
-                            } else {
-                              arr.push(value);
-                            }
-                            configWrite(itemName, arr);
+                      const itemName = settingData.clientSettingEnum.item;
+                      const valName = Object.keys(settingData).find((k) => k.includes("Value"));
+                      if (valName) {
+                        const value = valName === "intValue" ? Number(settingData[valName]) : settingData[valName];
+                        if (valName === "arrayValue") {
+                          const arr = configRead(itemName);
+                          if (arr.includes(value)) {
+                            arr.splice(arr.indexOf(value), 1);
                           } else {
-                            configWrite(itemName, value);
+                            arr.push(value);
+                          }
+                          configWrite(itemName, arr);
+                        } else {
+                          configWrite(itemName, value);
+                          if (itemName === "enableShorts") {
+                            try {
+                              showToast(
+                                "Shorts",
+                                value ? "Enabled - reload Home to see them" : "Hidden"
+                              );
+                            } catch (toastErr) {}
                           }
                         }
                       }
                     }
                   } else if (subCmd.customAction) {
-                    handledCustomAction = true;
-                    targetParameters = subCmd.customAction.parameters;
                     customAction(subCmd.customAction.action, subCmd.customAction.parameters);
                   }
                 }
-
-                if (handledCustomAction || commandsToExec.some(c => c.setClientSettingEndpoint)) {
-                  return true;
-                }
+                return true;
               }
 
               return ogResolve.call(this, cmd, _);
@@ -398,53 +429,100 @@
     }
   }
 
-  // Logic lọc và ép buộc codec & chất lượng video theo cấu hình
+  // Codec / quality policy
+  //  - enableForceAvc1 ON : keep AVC1 only (when the video has AVC1).
+  //  - enableForceAvc1 OFF: prefer AV01, otherwise VP9 (a codec the device cannot
+  //    decode, or that the video does not offer, is skipped) and cap the video at 720p.
+  const CODEC_MATCH = {
+    av01: (mime) => mime.includes("av01"),
+    vp9: (mime) => mime.includes("vp9") || mime.includes("vp09"),
+  };
+  const CODEC_PROBE = {
+    av01: 'video/mp4; codecs="av01.0.05M.08"',
+    vp9: 'video/webm; codecs="vp9"',
+  };
+
+  function isCodecSupported(codec) {
+    try {
+      if (typeof MediaSource === "undefined" || typeof MediaSource.isTypeSupported !== "function") {
+        return true;
+      }
+      return MediaSource.isTypeSupported(CODEC_PROBE[codec]);
+    } catch (err) {
+      return true;
+    }
+  }
+
+  function formatHeight(f) {
+    if (typeof f.height === "number" && f.height > 0) return f.height;
+    const m = /^(\d+)p/.exec(f.qualityLabel || "");
+    return m ? Number(m[1]) : 0;
+  }
+
+  function filterFormatsKeepAvc1(formats) {
+    const hasAvc1 = formats.some((f) => f.mimeType && f.mimeType.includes("avc1"));
+    if (!hasAvc1) return formats;
+    return formats.filter((f) => {
+      const mime = f.mimeType || "";
+      if (mime.startsWith("video/")) return mime.includes("avc1");
+      return true;
+    });
+  }
+
+  function filterFormatsAv01Vp9At720(formats) {
+    const videos = formats.filter((f) => (f.mimeType || "").startsWith("video/"));
+    if (!videos.length) return formats;
+
+    // codec: AV01 -> VP9 -> (neither offered/supported) leave the codec alone
+    const supported = { av01: isCodecSupported("av01"), vp9: isCodecSupported("vp9") };
+    let target = null;
+    for (const codec of ["av01", "vp9"]) {
+      if (supported[codec] && videos.some((f) => CODEC_MATCH[codec](f.mimeType))) {
+        target = codec;
+        break;
+      }
+    }
+    let pool;
+    if (target) {
+      pool = videos.filter((f) => CODEC_MATCH[target](f.mimeType));
+    } else {
+      // no AV01/VP9 to switch to: keep what the device can decode
+      const decodable = videos.filter(
+        (f) =>
+          !(CODEC_MATCH.av01(f.mimeType) && !supported.av01) &&
+          !(CODEC_MATCH.vp9(f.mimeType) && !supported.vp9)
+      );
+      pool = decodable.length ? decodable : videos;
+    }
+
+    // quality: exactly 720p when available, otherwise the closest lower one,
+    // otherwise the lowest higher one (never leave the video without a stream)
+    const heights = [...new Set(pool.map(formatHeight))].filter((h) => h > 0).sort((a, b) => a - b);
+    if (!heights.length) return formats;
+    let wanted;
+    if (heights.includes(720)) {
+      wanted = 720;
+    } else {
+      const lower = heights.filter((h) => h < 720);
+      wanted = lower.length ? lower[lower.length - 1] : heights[0];
+    }
+
+    return formats.filter((f) => {
+      if (!(f.mimeType || "").startsWith("video/")) return true; // keep audio & others
+      return pool.includes(f) && formatHeight(f) === wanted;
+    });
+  }
+
   function filterStreamingDataCodec(streamingData) {
     if (!streamingData) return;
-    const forceAvc1 = configRead("enableForceAvc1");
+    const filterFormats = configRead("enableForceAvc1")
+      ? filterFormatsKeepAvc1
+      : filterFormatsAv01Vp9At720;
 
-    const filterFormats = (formats) => {
-      if (!Array.isArray(formats)) return formats;
-
-      if (forceAvc1) {
-        // Nếu bật Force Codec AVC1: Giữ nguyên logic lọc AVC1 cũ
-        const hasAvc1 = formats.some(f => f.mimeType && f.mimeType.includes("avc1"));
-        if (!hasAvc1) return formats;
-        return formats.filter(f => {
-          const mime = f.mimeType || "";
-          if (mime.startsWith("video/")) {
-            return mime.includes("avc1");
-          }
-          return true;
-        });
-      } else {
-        // Nếu tắt Force Codec AVC1 (false):
-        // Kiểm tra xem có codec av01 không, nếu có dùng av01, ngược lại fallback sang vp9
-        const hasAv01 = formats.some(f => f.mimeType && f.mimeType.includes("av01"));
-        const targetCodec = hasAv01 ? "av01" : "vp9";
-        const hasTargetCodec = formats.some(f => f.mimeType && f.mimeType.includes(targetCodec));
-
-        return formats.filter(f => {
-          const mime = f.mimeType || "";
-          if (mime.startsWith("video/")) {
-            // Lọc theo codec mục tiêu (av01 hoặc vp9) nếu có
-            if (hasTargetCodec && !mime.includes(targetCodec)) {
-              return false;
-            }
-            // Ép chất lượng video về 720p (height === 720 hoặc qualityLabel === "720p")
-            const is720p = f.height === 720 || f.qualityLabel === "720p";
-            return is720p;
-          }
-          return true; // Giữ lại các định dạng audio và non-video khác
-        });
+    for (const key of ["formats", "adaptiveFormats"]) {
+      if (Array.isArray(streamingData[key])) {
+        streamingData[key] = filterFormats(streamingData[key]);
       }
-    };
-
-    if (streamingData.formats) {
-      streamingData.formats = filterFormats(streamingData.formats);
-    }
-    if (streamingData.adaptiveFormats) {
-      streamingData.adaptiveFormats = filterFormats(streamingData.adaptiveFormats);
     }
   }
 
@@ -550,10 +628,8 @@
         stripShortsFromResponse(r);
       }
 
-      // Kích hoạt lọc/ép codec AVC1 nếu được bật trong cấu hình
-      if (configRead("enableForceAvc1")) {
-        filterStreamingDataCodec(r?.streamingData);
-      }
+      // Codec / quality policy (ON: keep AVC1, OFF: AV01 or VP9 capped at 720p)
+      filterStreamingDataCodec(r?.streamingData);
     } catch (err) {
       console.error("[NoTubeTV] response filtering failed:", err);
     }
@@ -770,24 +846,17 @@
       tile?.onSelectCommand ||
       tile?.onLongPressCommand ||
       reel?.navigationEndpoint;
-    const title =
-      gridVideo?.title?.simpleText ||
-      gridVideo?.title?.runs?.map((run) => run.text).join("") ||
-      tile?.metadata?.tileMetadataRenderer?.title?.simpleText ||
-      reel?.headline?.simpleText ||
-      "";
 
     return Boolean(
       reel ||
       shortsLockup ||
+      item?.lockupViewModel?.contentType === "LOCKUP_CONTENT_TYPE_SHORT" ||
       tile?.tvhtml5ShelfRendererType === "TVHTML5_TILE_RENDERER_TYPE_SHORTS" ||
-      isShortsEndpoint(navigationEndpoint) ||
-      /shorts/i.test(title)
+      isShortsEndpoint(navigationEndpoint)
     );
   }
 
   function isShortsShelf(shelf) {
-    const title = getShelfTitleText(shelf);
     const items = shelf?.shelfRenderer?.content?.horizontalListRenderer?.items || [];
 
     if (shelf?.reelShelfRenderer) {
@@ -798,10 +867,6 @@
       shelf?.shelfRenderer?.tvhtml5ShelfRendererType ===
       "TVHTML5_SHELF_RENDERER_TYPE_SHORTS"
     ) {
-      return true;
-    }
-
-    if (/shorts/i.test(title)) {
       return true;
     }
 
@@ -1023,27 +1088,38 @@
         "sponsor", "intro", "outro", "interaction", "selfpromo", "music_offtopic",
       ];
 
-      const resp = await new Promise((resolve) => {
-        window.onNetworkBridgeResponse = (jsonString) => resolve(jsonString);
-        NetworkBridge.fetch(
-          `${sponsorblockAPI}/skipSegments/${videoHash}?categories=${encodeURIComponent(
-            JSON.stringify(categories)
-          )}`,
-          this.videoID
-        );
-      });
+      const url = `${sponsorblockAPI}/skipSegments/${videoHash}?categories=${encodeURIComponent(
+        JSON.stringify(categories)
+      )}`;
 
-      if (!resp) {
-        return;
-      }
-
-      let result;
+      // The hash endpoint answers with a list: one entry per video sharing the hash prefix.
+      let result = null;
       try {
-        result = JSON.parse(resp);
+        const res = await fetch(url);
+        if (res.ok) {
+          const list = await res.json();
+          result = Array.isArray(list)
+            ? list.find((entry) => entry && entry.videoID === this.videoID)
+            : list;
+        }
       } catch (err) {
-        return;
+        console.warn("[NoTubeTV] SponsorBlock fetch failed:", err);
       }
 
+      // Optional native bridge (only used when the app provides one).
+      if (!result && typeof NetworkBridge !== "undefined") {
+        const resp = await new Promise((resolve) => {
+          window.onNetworkBridgeResponse = (jsonString) => resolve(jsonString);
+          NetworkBridge.fetch(url, this.videoID);
+        });
+        try {
+          result = resp ? JSON.parse(resp) : null;
+        } catch (err) {
+          result = null;
+        }
+      }
+
+      if (!this.active) return; // destroyed while the request was running
       if (!result || !result.segments || !result.segments.length) {
         return;
       }
@@ -1081,6 +1157,7 @@
       }
 
       this.video.addEventListener("play", this.scheduleSkipHandler);
+      this.video.addEventListener("seeked", this.scheduleSkipHandler);
       this.video.addEventListener("durationchange", this.durationChangeHandler);
     }
 
@@ -1130,12 +1207,19 @@
       clearTimeout(this.nextSkipTimeout);
       this.nextSkipTimeout = null;
 
-      if (!this.active || this.video.paused) return;
+      if (!this.active || !this.video || !this.segments || this.video.paused) return;
 
       const current = this.video.currentTime;
 
+      // Only segments that will really be skipped are scheduled. A disabled or
+      // manual-skip segment must not stop the chain towards the next one.
       const nextSegments = this.segments
-        .filter((seg) => seg.segment[0] >= current - 0.2)
+        .filter(
+          (seg) =>
+            this.skippableCategories.includes(seg.category) &&
+            !this.manualSkippableCategories.includes(seg.category) &&
+            seg.segment[0] >= current - 0.2
+        )
         .sort((a, b) => a.segment[0] - b.segment[0]);
 
       if (!nextSegments.length) return;
@@ -1148,15 +1232,19 @@
       const delay = Math.max(0, (start - current) * 1000);
 
       this.nextSkipTimeout = setTimeout(() => {
-        if (this.video.paused) return;
-        if (!this.skippableCategories.includes(segment.category)) return;
+        if (!this.active || !this.video || this.video.paused) return;
+
+        // The user may have seeked, or playback may have stalled, while we waited.
+        const now = this.video.currentTime;
+        if (now < start - 0.5 || now >= end) {
+          this.scheduleSkip();
+          return;
+        }
 
         const skipName = barTypes[segment.category]?.name || segment.category;
-        if (!this.manualSkippableCategories.includes(segment.category)) {
-          showToast("SponsorBlock", `Skipping ${skipName}`);
-          this.video.currentTime = end;
-          this.scheduleSkip();
-        }
+        showToast("SponsorBlock", `Skipping ${skipName}`);
+        this.video.currentTime = end;
+        this.scheduleSkip();
       }, delay);
     }
 
@@ -1172,6 +1260,7 @@
 
       if (this.video) {
         this.video.removeEventListener("play", this.scheduleSkipHandler);
+        this.video.removeEventListener("seeked", this.scheduleSkipHandler);
         this.video.removeEventListener("durationchange", this.durationChangeHandler);
       }
     }
@@ -1183,7 +1272,10 @@
     "hashchange",
     () => {
       if (!configRead("enableSponsorBlock")) {
-        if (window.sponsorblock) window.sponsorblock.destroy();
+        if (window.sponsorblock) {
+          window.sponsorblock.destroy();
+          window.sponsorblock = null;
+        }
         return;
       }
       const match = location.hash.match(/[?&]v=([^&]+)/);
@@ -1216,7 +1308,7 @@
 
   function execute_once_dom_loaded() {
     var css_248z =
-      ".ytaf-ui-container {\n  position: absolute;\n  top: 10%;\n  left: 10%;\n  right: 10%;\n  bottom: 10%;\n\n  background: rgba(0, 0, 0, 0.8);\n  color: white;\n  border-radius: 20px;\n  padding: 20px;\n  font-size: 1.5rem;\n  z-index: 1000;\n}\n\n.ytaf-ui-container :focus {\n  outline: 4px red solid;\n}\n\n.ytaf-ui-container h1 {\n  margin: 0;\n  margin-bottom: 0.5em;\n  text-align: center;\n}\n\n.ytaf-ui-container input[type='checkbox'] {\n  width: 1.4rem;\n  height: 1.4rem;\n}\n\n.ytaf-ui-container input[type='radio'] {\n  width: 1.4rem;\n  height: 1.4rem;\n}\n\n.ytaf-ui-container label {\n  display: block;\n  font-size: 1.4rem;\n}\n\n.ytaf-notification-container {\n  position: absolute;\n  right: 10px;\n  bottom: 10px;\n  font-size: 16pt;\n  z-index: 1200;\n}\n\n.ytaf-notification-container .message {\n  background: rgba(0, 0, 0, 0.7);\n  color: white;\n  padding: 1em;\n  margin: 0.5em;\n  transition: all 0.3s ease-in-out;\n  opacity: 1;\n  line-height: 1;\n  border-right: 10px solid rgba(50, 255, 50, 0.3);\n  display: inline-block;\n  float: right;\n}\n\n.ytaf-notification-container .message-hidden {\n  opacity: 0;\n  margin: 0 0.5em;\n  padding: 0 1em;\n  line-height: 0;\n}\n\n/* Fixes transparency effect for the video player */\n\n.ytLrWatchDefaultShadow {\n  background-image: linear-gradient(to bottom, rgba(0, 0, 0, 0) 0, rgba(0, 0, 0, 0.8) 90%) !important;\n  background-color: rgba(0, 0, 0, 0.3) !important;\n  display: block !important;\n  height: 100% !important;\n  pointer-events: none !important;\n  position: absolute !important;\n  width: 100% !important;\n}\n\n/* Hide shorts shelf by exact type - safe, won't match regular video rows */\n\n[tvhtml5-shelf-renderer-type='TVHTML5_SHELF_RENDERER_TYPE_SHORTS'] {\n  display: none !important;\n}\n\n.ytLrTileHeaderRendererShorts {\n  display: none !important;\n}";
+      ".ytaf-ui-container {\n  position: absolute;\n  top: 10%;\n  left: 10%;\n  right: 10%;\n  bottom: 10%;\n\n  background: rgba(0, 0, 0, 0.8);\n  color: white;\n  border-radius: 20px;\n  padding: 20px;\n  font-size: 1.5rem;\n  z-index: 1000;\n}\n\n.ytaf-ui-container :focus {\n  outline: 4px red solid;\n}\n\n.ytaf-ui-container h1 {\n  margin: 0;\n  margin-bottom: 0.5em;\n  text-align: center;\n}\n\n.ytaf-ui-container input[type='checkbox'] {\n  width: 1.4rem;\n  height: 1.4rem;\n}\n\n.ytaf-ui-container input[type='radio'] {\n  width: 1.4rem;\n  height: 1.4rem;\n}\n\n.ytaf-ui-container label {\n  display: block;\n  font-size: 1.4rem;\n}\n\n.ytaf-notification-container {\n  position: absolute;\n  right: 10px;\n  bottom: 10px;\n  font-size: 16pt;\n  z-index: 1200;\n}\n\n.ytaf-notification-container .message {\n  background: rgba(0, 0, 0, 0.7);\n  color: white;\n  padding: 1em;\n  margin: 0.5em;\n  transition: all 0.3s ease-in-out;\n  opacity: 1;\n  line-height: 1;\n  border-right: 10px solid rgba(50, 255, 50, 0.3);\n  display: inline-block;\n  float: right;\n}\n\n.ytaf-notification-container .message-hidden {\n  opacity: 0;\n  margin: 0 0.5em;\n  padding: 0 1em;\n  line-height: 0;\n}\n\n/* Fixes transparency effect for the video player */\n\n.ytLrWatchDefaultShadow {\n  background-image: linear-gradient(to bottom, rgba(0, 0, 0, 0) 0, rgba(0, 0, 0, 0.8) 90%) !important;\n  background-color: rgba(0, 0, 0, 0.3) !important;\n  display: block !important;\n  height: 100% !important;\n  pointer-events: none !important;\n  position: absolute !important;\n  width: 100% !important;\n}";
 
     const existingStyle = document.querySelector("style[nonce]");
     if (existingStyle) {

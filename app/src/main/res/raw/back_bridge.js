@@ -7,14 +7,6 @@
         document.dispatchEvent(upEvent);
     }
 
-    const video = document.querySelector('video');
-    const isPlayingVideo = video && !video.paused;
-
-    if (isPlayingVideo) {
-        dispatchKey('Escape', 27, 'Escape');
-        return;
-    }
-
     const isRootPage = window.location.hash === "#/" || window.location.hash === "" || window.location.hash === "#" || window.location.href.includes("signin");
 
     if (!isRootPage) {
