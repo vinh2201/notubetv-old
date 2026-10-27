@@ -1061,7 +1061,7 @@
     music_offtopic: { color: "#ff9900", opacity: "0.7", name: "non-music part" },
   };
 
-  const sponsorblockAPI = "https://api.sponsor.ajay.app/api";
+  const sponsorblockAPI = "https://api.sponsor.ajay.app/";
 
   class SponsorBlockHandler {
     video = null;
